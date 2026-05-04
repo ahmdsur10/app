@@ -6,7 +6,7 @@ from shapely.geometry import shape
 from streamlit_folium import st_folium
 
 # -------------------------
-# تحميل وتنظيف البيانات
+# تحميل البيانات
 # -------------------------
 @st.cache_data
 def load_data():
@@ -17,26 +17,16 @@ def load_data():
 
     for i, feature in enumerate(data["features"]):
 
-        # -------------------------
-        # 1) التحقق من وجود geometry
-        # -------------------------
         geom_data = feature.get("geometry")
 
         if not geom_data:
             continue
 
-        if "type" not in geom_data or "coordinates" not in geom_data:
-            continue
-
-        # -------------------------
-        # 2) تحويل الشكل بأمان
-        # -------------------------
         try:
             geom = shape(geom_data)
-        except Exception:
+        except:
             continue
 
-        # تجاهل الأشكال الفارغة
         if geom.is_empty:
             continue
 
@@ -45,7 +35,7 @@ def load_data():
         rows.append({
             "id": i,
             "type": props.get("type", "pipe"),
-            "length": geom.length,
+            "length": float(geom.length),
             "geometry": geom_data
         })
 
@@ -54,24 +44,38 @@ def load_data():
 df = load_data()
 
 # -------------------------
-# Session State
+# UI
+# -------------------------
+st.title("💧 Storm Network Cost Calculator")
+
+pipe_price = st.number_input("Pipe price", value=100)
+box_price = st.number_input("Box price", value=200)
+
+# -------------------------
+# Session state
 # -------------------------
 if "selected_ids" not in st.session_state:
     st.session_state.selected_ids = []
 
 # -------------------------
-# UI
+# 🔥 مهم: التأكد أن البيانات ليست فاضية
 # -------------------------
-st.title("💧 Storm Network Cost Calculator")
-
-pipe_price = st.number_input("سعر المتر Pipe", value=100)
-box_price = st.number_input("سعر المتر Box", value=200)
+if df.empty:
+    st.error("❌ لا توجد بيانات صالحة في GeoJSON")
+    st.stop()
 
 # -------------------------
-# الخريطة
+# إنشاء الخريطة (مهم: tiles مضافة)
 # -------------------------
-m = folium.Map(location=[24.7, 46.7], zoom_start=11)
+m = folium.Map(
+    location=[24.7, 46.7],
+    zoom_start=11,
+    tiles="OpenStreetMap"   # 🔥 هذا يحل مشكلة عدم ظهور الخريطة
+)
 
+# -------------------------
+# رسم العناصر
+# -------------------------
 for _, row in df.iterrows():
 
     color = "blue" if row["type"] == "pipe" else "red"
@@ -79,68 +83,66 @@ for _, row in df.iterrows():
     if row["id"] in st.session_state.selected_ids:
         color = "green"
 
-    geo = folium.GeoJson(
+    folium.GeoJson(
         row["geometry"],
-        name=str(row["id"]),
         style_function=lambda x, color=color: {
             "color": color,
             "weight": 5
         },
-        tooltip=f"ID: {row['id']} | Type: {row['type']}"
-    )
-
-    geo.add_child(folium.Popup(str(row["id"])))
-    geo.add_to(m)
-
-# عرض الخريطة
-map_data = st_folium(m, width=800, height=500)
+        tooltip=f"ID: {row['id']} | {row['type']}",
+        popup=str(row["id"])
+    ).add_to(m)
 
 # -------------------------
-# التقاط الضغط من الخريطة
+# عرض الخريطة (هذا السطر هو المهم)
 # -------------------------
-if map_data and map_data.get("last_object_clicked"):
+map_output = st_folium(
+    m,
+    width=900,
+    height=500,
+    returned_objects=["last_object_clicked"]
+)
 
-    props = map_data["last_object_clicked"].get("properties")
+# -------------------------
+# اختيار من الخريطة
+# -------------------------
+if map_output and map_output.get("last_object_clicked"):
 
-    if props and "name" in props:
-        try:
-            clicked_id = int(props["name"])
+    try:
+        clicked = map_output["last_object_clicked"]
+
+        if "popup" in clicked:
+            clicked_id = int(clicked["popup"])
 
             if clicked_id not in st.session_state.selected_ids:
                 st.session_state.selected_ids.append(clicked_id)
 
-        except:
-            pass
+    except:
+        pass
 
 # -------------------------
-# عرض المختار
+# النتائج
 # -------------------------
-st.write("📍 العناصر المختارة:", st.session_state.selected_ids)
+st.write("📍 Selected:", st.session_state.selected_ids)
 
-selected = df[df["id"].isin(st.session_state.selected_ids)].copy()
+selected = df[df["id"].isin(st.session_state.selected_ids)]
 
-# -------------------------
-# الحساب
-# -------------------------
 if not selected.empty:
 
     selected["cost"] = selected.apply(
-        lambda row: row["length"] * (pipe_price if row["type"] == "pipe" else box_price),
+        lambda r: r["length"] * (pipe_price if r["type"] == "pipe" else box_price),
         axis=1
     )
 
-    total_cost = selected["cost"].sum()
-
-    st.subheader("📊 النتائج")
-
+    st.subheader("📊 Results")
     st.dataframe(selected[["id", "type", "length", "cost"]])
 
-    st.metric("💰 التكلفة الإجمالية", f"{total_cost:,.2f}")
+    st.metric("💰 Total Cost", f"{selected['cost'].sum():,.2f}")
 
     st.bar_chart(selected.groupby("type")["cost"].sum())
 
 # -------------------------
 # Reset
 # -------------------------
-if st.button("🔄 Reset Selection"):
+if st.button("Reset"):
     st.session_state.selected_ids = []
