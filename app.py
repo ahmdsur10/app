@@ -9,7 +9,7 @@ from streamlit_folium import st_folium
 # -------------------------
 @st.cache_data
 def load_data():
-    gdf = gpd.read_file("network.json")  # أو shapefile
+    gdf = gpd.read_file("network.geojson")  # أو shapefile
     gdf = gdf.to_crs(epsg=3857)
     gdf["length"] = gdf.geometry.length  # حساب الطول
     return gdf
